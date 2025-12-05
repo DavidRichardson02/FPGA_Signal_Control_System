@@ -1,0 +1,219 @@
+// ============================================================
+//  Pmod ToF (ISL29501) distance logger for Protocol I2C
+//  Instrument:  Protocol → Mode = "I2C" → Script = Sensor
+//
+//  - 7-bit address:         0x57
+//  - Distance register:     0xD1 (MSB, LSB)
+//  - Conversion (example):  dist_m = raw / 65536 * 33.31
+//
+//  Telemetry: prints idx, time, raw, distance_m, distance_mm
+//  Logging  : appends same fields to CSV file on disk
+// ============================================================
+
+// ------------ User config -----------------------------------
+const TOF_ADDR     = 0x57;      // 7-bit I2C address
+const REG_DIST_D1  = 0xD1;      // distance sub-address
+const MAX_RETRIES  = 3;
+
+// Hard-coded CSV path (adapt as needed)
+const CSV_FILENAME = "/Users/98dav/tof_distance_log.csv";
+
+// ------------ State -----------------------------------------
+var sampleIdx = 0;
+var t0        = 0;
+
+// ------------ Plot state (distance vs time) -----------------
+var tData    = [];   // X axis (time_s)
+var dData    = [];   // Y axis (distance)
+var MAX_PTS  = 500;  // number of points to keep visible
+// ------------ Time helper (seconds since initialize) --------
+function nowSeconds() {
+    var t = Date.now() / 1000.0;
+    if (t0 === 0) t0 = t;
+    return t - t0;
+}
+// ------------ I2C wrappers (Protocol I2C Script environment)-
+function i2cWrite(addr, data) {
+    try {
+        // Write(addr, [bytes...]) → true/false
+        var ok = Write(addr, data);
+        if (!ok) {
+            print("I2C WRITE NACK at addr 0x" + addr.toString(16));
+        }
+        return ok;
+    } catch (e) {
+        print("I2C WRITE exception at addr 0x" + addr.toString(16) + ": " + e);
+        return false;
+    }
+}
+function i2cRead(addr, count) {
+    try {
+        // Read(addr, count) → array of bytes
+        var rd = Read(addr, count);
+        return rd;
+    } catch (e) {
+        print("I2C READ exception at addr 0x" + addr.toString(16) + ": " + e);
+        return null;
+    }
+}
+function i2cWriteRead(addr, wBytes, count) {
+    // Use WriteRead if available (repeated-start); otherwise emulate.
+    if (typeof WriteRead !== "undefined") {
+        try {
+            return WriteRead(addr, wBytes, count);
+        } catch (e) {
+            print("I2C WriteRead exception at addr 0x" + addr.toString(16) + ": " + e);
+            return null;
+        }
+    } else {
+        if (!i2cWrite(addr, wBytes)) return null;
+        return i2cRead(addr, count);
+    }
+}
+// ------------ Single distance read (one attempt) -------------
+function readDistanceOnce() {
+    // Sub-addressed read of 0xD1 → 2 bytes (MSB+LSB)
+    var rd = i2cWriteRead(TOF_ADDR, [REG_DIST_D1], 2);
+    if (!rd || rd.length < 2) {
+        print("I2C read of distance register failed or timed out.");
+        return { ok:false, raw:0, dist_m:0.0, dist_mm:0 };
+    }
+
+    var raw     = ((rd[0] << 8) | rd[1]) & 0xFFFF;
+    var dist_m  = raw / 65536.0 * 33.31;      // sensor scaling
+    var dist_mm = Math.round(dist_m * 1000);  // integer millimeters
+
+    return { ok:true, raw:raw, dist_m:dist_m, dist_mm:dist_mm };
+}
+
+// ------------ Retry wrapper ---------------------------------
+function readDistance() {
+    for (var k = 0; k < MAX_RETRIES; k++) {
+        var res = readDistanceOnce();
+        if (res.ok) {
+            if (k > 0) {
+                print("NOTE: distance succeeded after", k, "retries.");
+            }
+            return res;
+        }
+    }
+    print("ERROR: distance failed after " + MAX_RETRIES + " retries.");
+    return { ok:false, raw:0, dist_m:0.0, dist_mm:0 };
+}
+
+// ============================================================
+//  initialize(): called once when you press Run (Sensor mode)
+// ============================================================
+function initialize() {
+    // Optional: set I²C clock here if supported in this environment
+    try {
+        // Frequency(100000);  // 100 kHz, if available
+    } catch (e) { }
+
+    // Overwrite file and write header *once*
+    try {
+        FileWriteLine(CSV_FILENAME, "idx,time_s,raw,distance_m,distance_mm");
+    } catch (e) {
+        print("WARN: could not write CSV header:", e);
+    }
+
+    sampleIdx = 0;
+    t0        = 0;
+
+    print("ToF Sensor I2C Protocol script initialized.");
+    print("  I2C addr = 0x" + TOF_ADDR.toString(16));
+    print("  Logging to: " + CSV_FILENAME);
+    print("Loop period is set by the Sensor update rate in the UI.\n");
+
+
+    // ---- Configure Script plot1 for distance vs time ----
+    try {
+        // X axis = time
+        plot1.X().Units.text           = "Time (s)";
+        plot1.X().AutoScale.checked    = true;      // autoscale horizontally
+        // Y axis = distance (meters or mm)
+        plot1.Y1().Units.text          = "Distance (m)";
+        plot1.Y1().AutoScale.checked   = true;      // autoscale vertically
+
+        // Start with empty data
+        tData = [];
+        dData = [];
+        plot1.X().data  = tData;
+        plot1.Y1().data = dData;
+    } catch (e) {
+        print("NOTE: plot1 not available in this context:", e);
+    }
+
+    return true;
+}
+// ============================================================
+//  loop(): called repeatedly at the Sensor update rate
+// ============================================================
+function loop() {
+    var t   = nowSeconds();
+    var res = readDistance();
+
+    if (!res.ok) {
+        print("k =", sampleIdx,
+              " t =", t.toFixed(3), "s",
+              " Distance read FAILED");
+        sampleIdx++;
+        return true;  // keep trying
+    }
+
+    // Telemetry to Output window
+    print(
+        "k =", sampleIdx,
+        " t =", t.toFixed(3), "s",
+        " raw =", res.raw,
+        " d =", res.dist_m.toFixed(3), "m",
+        " (", res.dist_mm, "mm )"
+    );
+    // CSV logging (append one line per sample)
+    var line =
+        sampleIdx + "," +
+        t.toFixed(6) + "," +
+        res.raw + "," +
+        res.dist_m.toFixed(6) + "," +
+        res.dist_mm;
+
+    try {
+        FileAppendLine(CSV_FILENAME, line);
+    } catch (e) {
+        print("WARN: FileAppendLine failed:", e);
+    }
+        // ---- Live stripchart update (distance vs time) ----
+    try {
+        // choose either meters or mm:
+        var yVal = res.dist_m;      // or: res.dist_mm
+
+        // Append new sample
+        tData.push(t);
+        dData.push(yVal);
+
+        // Keep only the most recent MAX_PTS samples
+        if (tData.length > MAX_PTS) {
+            tData.shift();
+            dData.shift();
+        }
+
+        // Push data into the Script plot
+        plot1.X().data  = tData;
+        plot1.Y1().data = dData;
+    } catch (e) {
+        // If plot1 doesn't exist (e.g. running in a context without Script plots),
+        // just ignore plotting errors and continue logging.
+    }
+
+
+    sampleIdx++;
+    return true;  // continue looping
+}
+
+// ============================================================
+//  finish(): called once when you press Stop
+// ============================================================
+function finish() {
+    print("ToF Sensor I2C Protocol script finished after", sampleIdx, "samples.");
+    return "done";
+}
