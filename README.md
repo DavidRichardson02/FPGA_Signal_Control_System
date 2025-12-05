@@ -99,13 +99,27 @@ The system implements three tightly-coupled subsystems:
 
 ---
 
-## Repository Layout
 
-```text
-rtl/        # Verilog RTL: top-level, sensor/actuator interfaces, VGA, packetizer
-constr/     # XDC pin constraints for Nexys A7-100T
-scripts/    # Vivado Tcl scripts (optional, for project regeneration)
-matlab/     # Telemetry decoder, plotting tools, logo conversion utilities
-docs/       # Report, poster, cheat sheet, and supplementary documentation
+
+# FPGA Signal Control System — Project Walkthrough
+
+<p align="center">
+  <img 
+       src="https://raw.githubusercontent.com/<YOUR_USERNAME>/<YOUR_REPO>/main/docs/FPGA_Walkthrough_Cinematic.gif"
+       width="800"
+       alt="FPGA Signal Control System — Full Cinematic Walkthrough">
+</p>
+
+This cinematic walkthrough illustrates the complete end-to-end signal-processing,
+control, and visualization pipeline of the FPGA Signal Control System.
+
+### Walkthrough Sequence
+1. **Hardware Setup** — Nexys A7, ToF sensor, PIR, fan PWM stage, rotary encoder.  
+2. **Logic Analyzer** — Real I²C, IRQ, and PWM timing validation.  
+3. **MATLAB Telemetry** — Decoding, logging, and visualization of UART frames.  
+4. **VGA System** — Polar mapping, HUD overlays, temperature bars, fan logic tiles.  
+5. **Showcase Demo** — Full system running live during competition.  
+6. **Routing Map** — Post-implementation FPGA layout visualization.
+
 images/     # Photos and screenshots used in the README
 vivado/     # (Optional) Vivado project files; can be regenerated from scripts
