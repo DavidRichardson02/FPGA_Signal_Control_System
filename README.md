@@ -121,5 +121,3 @@ control, and visualization pipeline of the FPGA Signal Control System.
 5. **Showcase Demo** — Full system running live during competition.  
 6. **Routing Map** — Post-implementation FPGA layout visualization.
 
-images/     # Photos and screenshots used in the README
-vivado/     # (Optional) Vivado project files; can be regenerated from scripts
