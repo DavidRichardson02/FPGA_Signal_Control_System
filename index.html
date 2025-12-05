@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FPGA Signal Control System</title>
+<link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<header class="hero">
+    <img src="images/hero.gif" alt="FPGA Walkthrough GIF" class="hero-gif">
+    <h1>FPGA Signal Control System</h1>
+    <p>Real-Time Mapping • Sensor Fusion • Hardware Control • VGA Visualization</p>
+</header>
+
+<section class="content">
+    <h2>Overview</h2>
+    <p>
+        This project implements a fully hardware-accelerated sensing and control system
+        on the Digilent Nexys A7 (Artix-7 FPGA). The design integrates Time-of-Flight ranging,
+        PIR motion detection, temperature sensing (XADC + TMP), rotary encoder surveying,
+        dual-buffered VGA graphics, and a hardware-deterministic UART telemetry pipeline.
+    </p>
+
+    <div class="grid">
+        <img src="images/hardware.jpg">
+        <img src="images/vga_output.jpg">
+    </div>
+
+    <h2>Core Features</h2>
+    <ul>
+        <li>Real-time ToF range acquisition (ISL29501) with IRQ-driven measurement</li>
+        <li>360° surveyor FSM with rotary encoder manual override</li>
+        <li>Full VGA pipeline: timing, range plot, HUD, logo buffer</li>
+        <li>Temperature-driven proportional fan controller</li>
+        <li>PIR “recent-motion” fading indicator (RGB LED + HUD widget)</li>
+        <li>High-speed UART telemetry (2&nbsp;Mbit/s) + MATLAB live decoding</li>
+        <li>Double-buffered 320×240 image loader via UART</li>
+    </ul>
+
+    <h2>System Architecture</h2>
+    <img src="images/schematic.png" class="wide">
+
+    <h2>Telemetry & MATLAB Tools</h2>
+    <p>
+        All measurements (distance, angle, status, temperature, fan duty) are streamed in
+        17-byte frames. MATLAB scripts included in the repository provide real-time:
+    </p>
+    <ul>
+        <li>Distance-vs-time plots</li>
+        <li>Polar mapping</li>
+        <li>Status timelines</li>
+        <li>Automatic CSV logging</li>
+        <li>VGA image loader (RGB444 → UART → FPGA)</li>
+    </ul>
+
+    <img src="images/telemetry.png" class="wide">
+
+    <h2>Repository Contents</h2>
+    <pre>
+rtl/
+ ├── spatial_mapping_temperature_control_top.v
+ ├── tof_sensor.v
+ ├── vga_range_plot_top.v
+ ├── vga_status_overlay.v
+ ├── angle_indexer.v
+ ├── rotary_encoder_quadrature.v
+ ├── ...
+matlab/
+ ├── fpga_telemetry_and_logo.m
+ ├── imageToRgb12_320x240.m
+docs/
+ ├── index.html
+ ├── style.css
+    </pre>
+
+    <h2>License</h2>
+    <p>This project is released under the MIT License.</p>
+
+</section>
+
+<footer>
+    <p>© 2025 David Richardson — FPGA Signal Control System</p>
+</footer>
+
+</body>
+</html>
