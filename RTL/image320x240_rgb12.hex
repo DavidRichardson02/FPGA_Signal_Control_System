@@ -1,0 +1,1 @@
+frame_idx,timestamp_s,theta_q15,theta_rad,theta_deg,dist_mm,status_hex,status_bits,crc_ok
