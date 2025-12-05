@@ -105,7 +105,7 @@ The system implements three tightly-coupled subsystems:
 
 <p align="center">
   <img 
-       src="https://raw.githubusercontent.com/<YOUR_USERNAME>/<YOUR_REPO>/main/docs/FPGA_Walkthrough_Cinematic.gif"
+       src="https://raw.githubusercontent.com/DavidRichardson02/FPGA_Signal_Control_System/main/docs/FPGA_Walkthrough_Cinematic.gif"
        width="800"
        alt="FPGA Signal Control System — Full Cinematic Walkthrough">
 </p>
