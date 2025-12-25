@@ -11,6 +11,150 @@ The design combines:
 
 Everything runs in hardware in a **single 100 MHz clock domain** – no soft CPU.
 
+flowchart LR
+  %% =========================
+  %% STAGE 0: PHYSICAL WORLD
+  %% =========================
+  subgraph P0["Physical Environment"]
+    TGT["Scene / Target Geometry"]
+    OCC["Occupancy / Motion (People)"]
+    THERM["Thermal State (Board / Ambient)"]
+  end
+
+  %% =========================
+  %% STAGE 1: SENSING
+  %% =========================
+  subgraph S1["Sensing Layer"]
+    TOF["ToF Distance Sensor (ISL29501)\nI²C samples: range + quality"]
+    PIR["PIR Motion Detector\nDigital occupancy"]
+    XADC["FPGA XADC\nDie temp / supply telemetry"]
+    ENC["Rotary Encoder\nAngle / sweep control"]
+  end
+
+  TGT --> TOF
+  OCC --> PIR
+  THERM --> XADC
+  TGT --> ENC
+
+  %% =========================
+  %% STAGE 2: FPGA ACQUISITION + CDC
+  %% =========================
+  subgraph F2["FPGA Acquisition + Clock-Domain Management"]
+    I2CIF["I²C Master + Register Sequencer\n(init, calibrate, read)"]
+    DEGLITCH["Debounce / De-glitch\n(PIR + Encoder)"]
+    CDC["CDC Bridges\n100 MHz sys ↔ 25 MHz pix"]
+    TS["Timestamping / Sample Valid Strobes"]
+  end
+
+  TOF --> I2CIF
+  PIR --> DEGLITCH
+  ENC --> DEGLITCH
+  XADC --> TS
+  I2CIF --> TS
+  DEGLITCH --> TS
+  TS --> CDC
+
+  %% =========================
+  %% STAGE 3: STATE ESTIMATION / MAPPING
+  %% =========================
+  subgraph F3["FPGA State + Mapping"]
+    ANG["Angle Integrator\n(encoder → θ)"]
+    MAP["Spatial Mapper\n(θ, range) → bins / pixels"]
+    FILTER["Filtering\n(median/EMA/outlier reject)"]
+    QUAL["Quality Gates\n(valid range / saturation / timeouts)"]
+  end
+
+  CDC --> ANG
+  CDC --> QUAL
+  QUAL --> FILTER
+  FILTER --> MAP
+  ANG --> MAP
+
+  %% =========================
+  %% STAGE 4: CONTROL
+  %% =========================
+  subgraph F4["FPGA Control Layer"]
+    MODE["Mode FSM\n(auto survey / manual / hold)"]
+    FAN["Fan Controller\nPWM + hysteresis + override"]
+    SAFE["Safety Interlocks\n(temp limits / sensor fault)"]
+  end
+
+  MAP --> MODE
+  CDC --> MODE
+  CDC --> FAN
+  CDC --> SAFE
+  SAFE --> FAN
+  MODE --> FAN
+
+  %% =========================
+  %% STAGE 5: PRESENTATION (VGA HUD)
+  %% =========================
+  subgraph V5["Real-Time VGA Visualization (25 MHz Pixel Domain)"]
+    VGA["VGA Timing + Raster\n640×480@60"]
+    HUD["HUD Overlay\nwidgets: range plot, temp, occupancy, θ"]
+    FRAME["Frame Composition\n(background map + overlays)"]
+  end
+
+  MAP --> FRAME
+  CDC --> HUD
+  VGA --> FRAME
+  HUD --> FRAME
+
+  %% =========================
+  %% STAGE 6: TELEMETRY OUT (UART)
+  %% =========================
+  subgraph U6["Telemetry + Logging"]
+    PKT["Packetizer\n(frames: sync, id, payload, CRC)"]
+    UART["UART Stream TX\n(binary or CSV-like)"]
+  end
+
+  MAP --> PKT
+  CDC --> PKT
+  FAN --> PKT
+  PKT --> UART
+
+  %% =========================
+  %% STAGE 7: PC ANALYSIS PIPELINE
+  %% =========================
+  subgraph PC7["PC Side: Capture → Parse → Analyze → Report"]
+    CAP["Serial Capture\n(TeraTerm / Python / MATLAB)"]
+    PARSE["Parser / Decoder\n(sync, fields, scaling)"]
+    CLEAN["Cleaning\n(dropouts, resample, align clocks)"]
+    ANALYZE["Analysis\ncalibration fits, error metrics, plots"]
+    REPORT["Artifacts\nCSV, figures, LaTeX/PDF notes"]
+  end
+
+  UART --> CAP
+  CAP --> PARSE
+  PARSE --> CLEAN
+  CLEAN --> ANALYZE
+  ANALYZE --> REPORT
+
+  %% =========================
+  %% STAGE 8: FEEDBACK LOOP (DESIGN ITERATION)
+  %% =========================
+  subgraph FB8["Engineering Feedback Loop"]
+    CAL["Calibration Updates\n(mapping curves, offsets, LUTs)"]
+    TUNE["Control Tuning\nthresholds, hysteresis, modes"]
+    RTL["RTL Revisions\nfilters, CDC, packet format, HUD"]
+    CONSTR["Constraints + Implementation\nXDC, timing closure"]
+  end
+
+  ANALYZE --> CAL
+  ANALYZE --> TUNE
+  CAL --> RTL
+  TUNE --> RTL
+  RTL --> CONSTR
+  CONSTR --> F2
+  CONSTR --> F3
+  CONSTR --> F4
+  CONSTR --> V5
+  CONSTR --> U6
+
+
+
+
+
 ---
 
 ## Project Overview
