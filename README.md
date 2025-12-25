@@ -11,147 +11,121 @@ The design combines:
 
 Everything runs in hardware in a **single 100 MHz clock domain** – no soft CPU.
 
+
 flowchart LR
-  %% =========================
-  %% STAGE 0: PHYSICAL WORLD
-  %% =========================
-  subgraph P0["Physical Environment"]
-    TGT["Scene / Target Geometry"]
-    OCC["Occupancy / Motion (People)"]
-    THERM["Thermal State (Board / Ambient)"]
-  end
+%% ============================================================================
+%% PHYSICAL INPUTS
+%% ============================================================================
+subgraph ENV["Physical Signals"]
+  TOF_HW["ToF Sensor\n(ISL29501)"]
+  PIR_HW["PIR Motion"]
+  ENC_HW["Rotary Encoder"]
+  THERM_HW["Board / Ambient Temp"]
+end
 
-  %% =========================
-  %% STAGE 1: SENSING
-  %% =========================
-  subgraph S1["Sensing Layer"]
-    TOF["ToF Distance Sensor (ISL29501)\nI²C samples: range + quality"]
-    PIR["PIR Motion Detector\nDigital occupancy"]
-    XADC["FPGA XADC\nDie temp / supply telemetry"]
-    ENC["Rotary Encoder\nAngle / sweep control"]
-  end
+%% ============================================================================
+%% LOW-LEVEL INTERFACES (100 MHz SYS)
+%% ============================================================================
+subgraph IFACE["Sensor Interfaces (sys_clk = 100 MHz)"]
+  adxl["adxl362_if (optional accel)"]
+  tof_if["isl29501_if\nI²C master + sequencer"]
+  pir_if["pir_sync + debounce"]
+  enc_if["rotary_encoder_if"]
+  xadc_if["xadc_temp_reader"]
+end
 
-  TGT --> TOF
-  OCC --> PIR
-  THERM --> XADC
-  TGT --> ENC
+TOF_HW --> tof_if
+PIR_HW --> pir_if
+ENC_HW --> enc_if
+THERM_HW --> xadc_if
 
-  %% =========================
-  %% STAGE 2: FPGA ACQUISITION + CDC
-  %% =========================
-  subgraph F2["FPGA Acquisition + Clock-Domain Management"]
-    I2CIF["I²C Master + Register Sequencer\n(init, calibrate, read)"]
-    DEGLITCH["Debounce / De-glitch\n(PIR + Encoder)"]
-    CDC["CDC Bridges\n100 MHz sys ↔ 25 MHz pix"]
-    TS["Timestamping / Sample Valid Strobes"]
-  end
+%% ============================================================================
+%% ACQUISITION + CDC
+%% ============================================================================
+subgraph CDC_SYS["Acquisition + CDC"]
+  sample_valid["sample_valid strobes"]
+  accel_cdc["accel_cdc_bridge"]
+  sensor_cdc["sensor_cdc_bridge"]
+end
 
-  TOF --> I2CIF
-  PIR --> DEGLITCH
-  ENC --> DEGLITCH
-  XADC --> TS
-  I2CIF --> TS
-  DEGLITCH --> TS
-  TS --> CDC
+tof_if --> sample_valid
+pir_if --> sample_valid
+enc_if --> sample_valid
+xadc_if --> sample_valid
 
-  %% =========================
-  %% STAGE 3: STATE ESTIMATION / MAPPING
-  %% =========================
-  subgraph F3["FPGA State + Mapping"]
-    ANG["Angle Integrator\n(encoder → θ)"]
-    MAP["Spatial Mapper\n(θ, range) → bins / pixels"]
-    FILTER["Filtering\n(median/EMA/outlier reject)"]
-    QUAL["Quality Gates\n(valid range / saturation / timeouts)"]
-  end
+sample_valid --> sensor_cdc
+sample_valid --> accel_cdc
 
-  CDC --> ANG
-  CDC --> QUAL
-  QUAL --> FILTER
-  FILTER --> MAP
-  ANG --> MAP
+%% ============================================================================
+%% STATE + MAPPING (SYS DOMAIN)
+%% ============================================================================
+subgraph MAP_SYS["Mapping / State (100 MHz)"]
+  angle_accum["angle_accumulator"]
+  spatial_map["spatial_mapper"]
+  map_filter["range_filter + validity gates"]
+end
 
-  %% =========================
-  %% STAGE 4: CONTROL
-  %% =========================
-  subgraph F4["FPGA Control Layer"]
-    MODE["Mode FSM\n(auto survey / manual / hold)"]
-    FAN["Fan Controller\nPWM + hysteresis + override"]
-    SAFE["Safety Interlocks\n(temp limits / sensor fault)"]
-  end
+sensor_cdc --> angle_accum
+sensor_cdc --> map_filter
+angle_accum --> spatial_map
+map_filter --> spatial_map
 
-  MAP --> MODE
-  CDC --> MODE
-  CDC --> FAN
-  CDC --> SAFE
-  SAFE --> FAN
-  MODE --> FAN
+%% ============================================================================
+%% CONTROL
+%% ============================================================================
+subgraph CTRL["Control Logic"]
+  mode_fsm["survey_mode_fsm"]
+  fan_ctrl["fan_pwm_controller"]
+  safety["safety_interlocks"]
+end
 
-  %% =========================
-  %% STAGE 5: PRESENTATION (VGA HUD)
-  %% =========================
-  subgraph V5["Real-Time VGA Visualization (25 MHz Pixel Domain)"]
-    VGA["VGA Timing + Raster\n640×480@60"]
-    HUD["HUD Overlay\nwidgets: range plot, temp, occupancy, θ"]
-    FRAME["Frame Composition\n(background map + overlays)"]
-  end
+sensor_cdc --> mode_fsm
+sensor_cdc --> fan_ctrl
+safety --> fan_ctrl
+mode_fsm --> fan_ctrl
 
-  MAP --> FRAME
-  CDC --> HUD
-  VGA --> FRAME
-  HUD --> FRAME
+%% ============================================================================
+%% VGA PIPELINE (PIXEL DOMAIN)
+%% ============================================================================
+subgraph VGA["VGA Subsystem (pix_clk = 25 MHz)"]
+  vga_timing["vga_timing_640x480"]
+  range_plot["vga_range_plot"]
+  status_ovl["vga_status_overlay"]
+  compose["vga_frame_compositor"]
+end
 
-  %% =========================
-  %% STAGE 6: TELEMETRY OUT (UART)
-  %% =========================
-  subgraph U6["Telemetry + Logging"]
-    PKT["Packetizer\n(frames: sync, id, payload, CRC)"]
-    UART["UART Stream TX\n(binary or CSV-like)"]
-  end
+spatial_map --> range_plot
+sensor_cdc --> status_ovl
+vga_timing --> compose
+range_plot --> compose
+status_ovl --> compose
 
-  MAP --> PKT
-  CDC --> PKT
-  FAN --> PKT
-  PKT --> UART
+%% ============================================================================
+%% TELEMETRY
+%% ============================================================================
+subgraph UART["Telemetry Output"]
+  packetizer["mapper_packetizer"]
+  uart_tx["uart_stream_tx"]
+end
 
-  %% =========================
-  %% STAGE 7: PC ANALYSIS PIPELINE
-  %% =========================
-  subgraph PC7["PC Side: Capture → Parse → Analyze → Report"]
-    CAP["Serial Capture\n(TeraTerm / Python / MATLAB)"]
-    PARSE["Parser / Decoder\n(sync, fields, scaling)"]
-    CLEAN["Cleaning\n(dropouts, resample, align clocks)"]
-    ANALYZE["Analysis\ncalibration fits, error metrics, plots"]
-    REPORT["Artifacts\nCSV, figures, LaTeX/PDF notes"]
-  end
+spatial_map --> packetizer
+sensor_cdc --> packetizer
+fan_ctrl --> packetizer
+packetizer --> uart_tx
 
-  UART --> CAP
-  CAP --> PARSE
-  PARSE --> CLEAN
-  CLEAN --> ANALYZE
-  ANALYZE --> REPORT
+%% ============================================================================
+%% PC-SIDE ANALYSIS
+%% ============================================================================
+subgraph PC["PC Capture & Analysis"]
+  capture["UART Capture\n(TeraTerm / Python / MATLAB)"]
+  parser["CSV / Binary Parser"]
+  analysis["Analysis + Plots\n(calibration, error, maps)"]
+end
 
-  %% =========================
-  %% STAGE 8: FEEDBACK LOOP (DESIGN ITERATION)
-  %% =========================
-  subgraph FB8["Engineering Feedback Loop"]
-    CAL["Calibration Updates\n(mapping curves, offsets, LUTs)"]
-    TUNE["Control Tuning\nthresholds, hysteresis, modes"]
-    RTL["RTL Revisions\nfilters, CDC, packet format, HUD"]
-    CONSTR["Constraints + Implementation\nXDC, timing closure"]
-  end
-
-  ANALYZE --> CAL
-  ANALYZE --> TUNE
-  CAL --> RTL
-  TUNE --> RTL
-  RTL --> CONSTR
-  CONSTR --> F2
-  CONSTR --> F3
-  CONSTR --> F4
-  CONSTR --> V5
-  CONSTR --> U6
-
-
+uart_tx --> capture
+capture --> parser
+parser --> analysis
+analysis --> packetizer
 
 
 
