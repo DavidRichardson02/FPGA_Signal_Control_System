@@ -55,7 +55,10 @@
 //
 //==============================================================================
 
-module spatial_mapping_temperature_control_top(
+module spatial_mapping_temperature_control_top #(
+    // Optional feature gates
+    parameter USE_UART_KEYBOARD = 1
+)(
     //====================== Board I/O ==================================================
     input  wire        clk_100MHz,    // [opcode:input]  [operands: 100 MHz system clock from board osc]
     // Theory: Every synchronous path is timed against this source; no secondary clocks.
@@ -281,8 +284,8 @@ module spatial_mapping_temperature_control_top(
     // generating clean 1-cycle pulses used by surveyor_fsm.
     //------------------------------------------------------------------------------
 
-    wire sweep_start_pulse;
-    wire sweep_stop_pulse;
+    wire sweep_start_pulse_btn;
+    wire sweep_stop_pulse_btn;
 
     reg sv_start_s0      = 1'b0, sv_start_s1      = 1'b0;
     reg [RST_DB_W-1:0] sv_start_cnt = {RST_DB_W{1'b0}};
@@ -326,8 +329,41 @@ module spatial_mapping_temperature_control_top(
         sv_stop_db_prev <= sv_stop_db;
     end
 
-    assign sweep_start_pulse = sv_start_db & ~sv_start_db_prev; // 1-cycle pulse
-    assign sweep_stop_pulse  = sv_stop_db  & ~sv_stop_db_prev;  // 1-cycle pulse
+    assign sweep_start_pulse_btn = sv_start_db & ~sv_start_db_prev; // 1-cycle pulse
+    assign sweep_stop_pulse_btn  = sv_stop_db  & ~sv_stop_db_prev;  // 1-cycle pulse
+
+    //==============================================================================
+    // 3a. UART keyboard control overlay
+    //==============================================================================
+    // The FTDI USB-UART channel doubles as a "USB keyboard" ingress when a
+    // terminal is focused and forwarding keystrokes. A dedicated decoder
+    // interprets two-byte commands ("!<cmd>") into pulses and sticky overrides
+    // that augment the physical buttons and switches.
+    //------------------------------------------------------------------------------
+
+    wire kbd_consume;
+    wire kbd_sweep_start_pulse;
+    wire kbd_sweep_stop_pulse;
+    wire kbd_fan_toggle_pulse;
+
+    wire kbd_sw_temp_en;
+    wire kbd_sw_manual_en;
+    wire kbd_sw_pir_en;
+    wire kbd_sw_survey_manual;
+    wire kbd_sw_logo_sel;
+
+    wire [7:0] kbd_cmd_byte;
+    wire       kbd_cmd_pulse;
+
+    wire sweep_start_pulse = sweep_start_pulse_btn | kbd_sweep_start_pulse;
+    wire sweep_stop_pulse  = sweep_stop_pulse_btn  | kbd_sweep_stop_pulse;
+    wire btn_d_pulse_any   = btn_d_pulse | kbd_fan_toggle_pulse;
+
+    wire sw_temp_en_eff       = sw_temp_en       | kbd_sw_temp_en;
+    wire sw_manual_en_eff     = sw_manual_en     | kbd_sw_manual_en;
+    wire sw_pir_en_eff        = sw_pir_en        | kbd_sw_pir_en;
+    wire sw_survey_manual_eff = sw_survey_manual | kbd_sw_survey_manual;
+    wire sw_logo_sel_eff      = sw_logo_sel      | kbd_sw_logo_sel;
 
     //==============================================================================
     // 4. Seven-segment HH:MM clock and heartbeat display
@@ -596,13 +632,13 @@ module spatial_mapping_temperature_control_top(
     
         // Manual + PIR inputs
         .btn_d_level(btn_d_level),
-        .btn_d_pulse(btn_d_pulse),
+        .btn_d_pulse(btn_d_pulse_any),
         .pir_on     (pir_active),
     
         // Enable switches
-        .sw_temp_en   (sw_temp_en),
-        .sw_manual_en (sw_manual_en),
-        .sw_pir_en    (sw_pir_en),
+        .sw_temp_en   (sw_temp_en_eff),
+        .sw_manual_en (sw_manual_en_eff),
+        .sw_pir_en    (sw_pir_en_eff),
     
         // Fan outputs
         .fan_pwm_ja3  (fan_pwm_ja3),
@@ -622,9 +658,9 @@ module spatial_mapping_temperature_control_top(
     assign led14 = fan_manual_on; // Manual override contribution to fan
     assign led13 = fan_temp_on;   // Temperature contribution to fan
     
-    assign led12 = sw_temp_en;    // TEMP enable switch state
-    assign led11 = sw_manual_en;  // MANUAL enable switch state
-    assign led10 = sw_pir_en;     // PIR enable switch state
+    assign led12 = sw_temp_en_eff;    // TEMP enable switch state
+    assign led11 = sw_manual_en_eff;  // MANUAL enable switch state
+    assign led10 = sw_pir_en_eff;     // PIR enable switch state
 
     // Aggregate fan_on for VGA overlay
     assign fan_on = fan_temp_on | fan_manual_on | fan_pir_on;
@@ -755,7 +791,7 @@ module spatial_mapping_temperature_control_top(
     // Step source MUX for angle_indexer:
     //   AUTO   (survey_manual_mode=0): use surveyor_fsm step_pulse/dir
     //   MANUAL (survey_manual_mode=1): use rotary encoder step_pulse/dir
-    wire survey_manual_mode = sw_survey_manual;
+    wire survey_manual_mode = sw_survey_manual_eff;
 
     wire step_pulse_src;
     wire step_dir_src;
@@ -911,24 +947,69 @@ module spatial_mapping_temperature_control_top(
     //==============================================================================
     // 14. UART RX path → logo frame loader → double-buffered logo memory
     //==============================================================================
+    wire [7:0] rx_byte_uart;
+    wire       rx_vld_uart;
+    wire [7:0] rx_byte;
+    wire       rx_vld;
+
     ///*
-    
+
     // UART RX: host → FPGA logo frames/*
     uart_rx #(
         .CLK_HZ(100_000_000),
         .BAUD  (2_000_000)
     ) u_uart_rx (
-        .clk    (clk_100MHz),
-        .rst    (rst),
-        .rxi    (uart_rxi),
-        .rx_byte(rx_byte),
-        .rx_vld (rx_vld)
+        .clk     (clk_100MHz),
+        .rst     (rst),
+        .rxi     (uart_rxi),
+        .rx_byte (rx_byte_uart),
+        .rx_vld  (rx_vld_uart)
     );
     //*/
-    
-    
-    
-    
+
+
+
+
+    generate
+        if (USE_UART_KEYBOARD) begin : gen_uart_keyboard
+            uart_keyboard_controller u_kbd_ctrl (
+                .clk                       (clk_100MHz),
+                .rst                       (rst),
+                .rx_byte                   (rx_byte_uart),
+                .rx_vld                    (rx_vld_uart),
+                .consume                   (kbd_consume),
+                .last_cmd_byte             (kbd_cmd_byte),
+                .cmd_pulse                 (kbd_cmd_pulse),
+                .sweep_start_pulse         (kbd_sweep_start_pulse),
+                .sweep_stop_pulse          (kbd_sweep_stop_pulse),
+                .fan_toggle_pulse          (kbd_fan_toggle_pulse),
+                .sw_temp_en_override       (kbd_sw_temp_en),
+                .sw_manual_en_override     (kbd_sw_manual_en),
+                .sw_pir_en_override        (kbd_sw_pir_en),
+                .sw_survey_manual_override (kbd_sw_survey_manual),
+                .sw_logo_sel_override      (kbd_sw_logo_sel)
+            );
+        end else begin : gen_uart_keyboard_bypass
+            assign kbd_consume            = 1'b0;
+            assign kbd_sweep_start_pulse  = 1'b0;
+            assign kbd_sweep_stop_pulse   = 1'b0;
+            assign kbd_fan_toggle_pulse   = 1'b0;
+
+            assign kbd_cmd_byte           = 8'h2D;
+            assign kbd_cmd_pulse          = 1'b0;
+
+            assign kbd_sw_temp_en         = 1'b0;
+            assign kbd_sw_manual_en       = 1'b0;
+            assign kbd_sw_pir_en          = 1'b0;
+            assign kbd_sw_survey_manual   = 1'b0;
+            assign kbd_sw_logo_sel        = 1'b0;
+        end
+    endgenerate
+
+    assign rx_byte = rx_byte_uart;
+    assign rx_vld  = rx_vld_uart & ~kbd_consume;
+
+
     wire        logo_wr_en_sys;
     wire [16:0] logo_wr_addr_sys;
     wire [11:0] logo_wr_data_sys;
@@ -985,7 +1066,7 @@ module spatial_mapping_temperature_control_top(
             logo_sel_s0 <= 1'b0;
             logo_sel_s1 <= 1'b0;
         end else begin
-            logo_sel_s0 <= sw_logo_sel;
+            logo_sel_s0 <= sw_logo_sel_eff;
             logo_sel_s1 <= logo_sel_s0;
         end
     end
@@ -1391,10 +1472,18 @@ module spatial_mapping_temperature_control_top(
         .enc_step_pulse (enc_step_pulse_sys),
         .enc_dir        (enc_dir_sys),
     
-        .sw_temp_en     (sw_temp_en),
-        .sw_manual_en   (sw_manual_en),
-        .sw_pir_en      (sw_pir_en),
-    
+        .sw_temp_en     (sw_temp_en_eff),
+        .sw_manual_en   (sw_manual_en_eff),
+        .sw_pir_en      (sw_pir_en_eff),
+
+        .kbd_cmd_byte   (kbd_cmd_byte),
+        .kbd_cmd_pulse  (kbd_cmd_pulse),
+        .kbd_sw_temp_en (kbd_sw_temp_en),
+        .kbd_sw_manual_en(kbd_sw_manual_en),
+        .kbd_sw_pir_en  (kbd_sw_pir_en),
+        .kbd_sw_survey_manual(kbd_sw_survey_manual),
+        .kbd_sw_logo_sel(kbd_sw_logo_sel),
+
         // Accelerometer inputs (already in pix domain via accel_cdc_bridge)
         .accel_x_pix    (accel_x_q7_pix),
         .accel_y_pix    (accel_y_q7_pix),

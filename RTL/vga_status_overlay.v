@@ -1,4 +1,5 @@
 `timescale 1ns/1ps
+`default_nettype none
 
 // ============================================================================
 // File    : vga_status_overlay.v
@@ -85,6 +86,8 @@
 //          - UART footer band: a color-coded horizontal bar at the bottom of
 //            the panel with length proportional to uart_level (decays per
 //            frame). The bar color is derived from uart_byte_pix.
+//          - USB keyboard overlay: a command activity meter, last command
+//            glyph pair (“!X”), and override tiles sharing ROW3, COL2–3.
 //
 //     8) PIR “motion streak” HUD (ROW3, cols2–3):
 //          - pir_rise kicks pir_level to 0xFF; pir_level decays once per frame.
@@ -138,8 +141,9 @@
 //        * Owns all HUD rendering, glyph generation, and color composition.
 //   - System domain (100 MHz, not visible here):
 //        * sample_q15, duty_q15, fan_*, uart_*, byte_accepted, theta_q15,
-//          pir_*, enc_* are all generated in the system domain and must be
-//          clean and synchronous there before entering this module.
+//          pir_*, enc_*, and keyboard taps are all generated in the system
+//          domain and must be clean and synchronous there before entering
+//          this module.
 //
 // CDC notes
 // ----------------------------------------------------------------------------
@@ -211,6 +215,15 @@ module vga_status_overlay #(
     input  wire        sw_temp_en,      // enable TEMP-based cooling
     input  wire        sw_manual_en,    // enable MANUAL cooling
     input  wire        sw_pir_en,       // enable PIR-based cooling
+
+    // USB keyboard telemetry (system domain)
+    input  wire [7:0]  kbd_cmd_byte,    // last recognized command character
+    input  wire        kbd_cmd_pulse,   // 1-cycle pulse per recognized command
+    input  wire        kbd_sw_temp_en,
+    input  wire        kbd_sw_manual_en,
+    input  wire        kbd_sw_pir_en,
+    input  wire        kbd_sw_survey_manual,
+    input  wire        kbd_sw_logo_sel,
 
 
     // From accel_cdc_bridge (pix_clk domain)
@@ -322,8 +335,20 @@ endfunction
     reg  [7:0] uart_byte_pix;            // last transmitted byte in pix domain
     reg  [7:0] uart_byte_accepted_pix;   // last *accepted* byte in pix domain
 
+    // USB keyboard telemetry: command pulse + byte + overrides
+    reg        kbd_cmd_s0, kbd_cmd_s1, kbd_cmd_prev;
+    wire       kbd_cmd_rise_pix;
+    reg  [7:0] kbd_cmd_byte_s0, kbd_cmd_byte_s1, kbd_cmd_byte_pix;
+
+    reg        kbd_sw_temp_s0,   kbd_sw_temp_s1,   kbd_sw_temp_pix;
+    reg        kbd_sw_manual_s0, kbd_sw_manual_s1, kbd_sw_manual_pix;
+    reg        kbd_sw_pir_s0,    kbd_sw_pir_s1,    kbd_sw_pir_pix;
+    reg        kbd_sw_srv_s0,    kbd_sw_srv_s1,    kbd_sw_srv_pix;
+    reg        kbd_sw_logo_s0,   kbd_sw_logo_s1,   kbd_sw_logo_pix;
+
     assign tx_vld_sync = tx_vld_s1;
     assign tx_vld_rise = tx_vld_sync & ~tx_vld_prev;  // 1-cycle pulse in pix_clk
+    assign kbd_cmd_rise_pix = kbd_cmd_s1 & ~kbd_cmd_prev;
 
     // Theta: 2-FF sync + frame snapshot
     reg signed [15:0] theta_s0;
@@ -512,6 +537,15 @@ endfunction
             sw_temp_s0     <= 1'b0; sw_temp_s1   <= 1'b0; sw_temp_pix   <= 1'b0;
             sw_manual_s0   <= 1'b0; sw_manual_s1 <= 1'b0; sw_manual_pix <= 1'b0;
             sw_pir_s0      <= 1'b0; sw_pir_s1    <= 1'b0; sw_pir_pix    <= 1'b0;
+
+            // keyboard telemetry sync
+            kbd_cmd_s0     <= 1'b0; kbd_cmd_s1    <= 1'b0; kbd_cmd_prev   <= 1'b0;
+            kbd_cmd_byte_s0<= 8'h2D; kbd_cmd_byte_s1 <= 8'h2D; kbd_cmd_byte_pix <= 8'h2D;
+            kbd_sw_temp_s0 <= 1'b0; kbd_sw_temp_s1   <= 1'b0; kbd_sw_temp_pix   <= 1'b0;
+            kbd_sw_manual_s0<=1'b0; kbd_sw_manual_s1 <= 1'b0; kbd_sw_manual_pix <= 1'b0;
+            kbd_sw_pir_s0  <= 1'b0; kbd_sw_pir_s1    <= 1'b0; kbd_sw_pir_pix    <= 1'b0;
+            kbd_sw_srv_s0  <= 1'b0; kbd_sw_srv_s1    <= 1'b0; kbd_sw_srv_pix    <= 1'b0;
+            kbd_sw_logo_s0 <= 1'b0; kbd_sw_logo_s1   <= 1'b0; kbd_sw_logo_pix   <= 1'b0;
         end else begin
             // --- fan bits ---
             fan_temp_s0   <= fan_temp_on;
@@ -543,6 +577,36 @@ endfunction
                 sw_temp_pix   <= sw_temp_s1;
                 sw_manual_pix <= sw_manual_s1;
                 sw_pir_pix    <= sw_pir_s1;
+            end
+
+            // --- USB keyboard command sync + overrides ---
+            kbd_cmd_s0      <= kbd_cmd_pulse;
+            kbd_cmd_s1      <= kbd_cmd_s0;
+            kbd_cmd_prev    <= kbd_cmd_s1;
+            kbd_cmd_byte_s0 <= kbd_cmd_byte;
+            kbd_cmd_byte_s1 <= kbd_cmd_byte_s0;
+
+            kbd_sw_temp_s0   <= kbd_sw_temp_en;
+            kbd_sw_temp_s1   <= kbd_sw_temp_s0;
+            kbd_sw_manual_s0 <= kbd_sw_manual_en;
+            kbd_sw_manual_s1 <= kbd_sw_manual_s0;
+            kbd_sw_pir_s0    <= kbd_sw_pir_en;
+            kbd_sw_pir_s1    <= kbd_sw_pir_s0;
+            kbd_sw_srv_s0    <= kbd_sw_survey_manual;
+            kbd_sw_srv_s1    <= kbd_sw_srv_s0;
+            kbd_sw_logo_s0   <= kbd_sw_logo_sel;
+            kbd_sw_logo_s1   <= kbd_sw_logo_s0;
+
+            if (kbd_cmd_rise_pix) begin
+                kbd_cmd_byte_pix <= kbd_cmd_byte_s1;
+            end
+
+            if (frame_tick) begin
+                kbd_sw_temp_pix   <= kbd_sw_temp_s1;
+                kbd_sw_manual_pix <= kbd_sw_manual_s1;
+                kbd_sw_pir_pix    <= kbd_sw_pir_s1;
+                kbd_sw_srv_pix    <= kbd_sw_srv_s1;
+                kbd_sw_logo_pix   <= kbd_sw_logo_s1;
             end
 
             // --- temperature Q1.15 ---
@@ -695,7 +759,7 @@ endfunction
     localparam [9:0] ROW5_B = ROW5_T + CELL_H - 1;       // temp/duty digits
     
     localparam [9:0] ROW6_T = ROW5_B + 1;
-    localparam [9:0] ROW6_B = ROW6_T + CELL_H - 1;       // fan gauge, etc. 
+    localparam [9:0] ROW6_B = ROW6_T + CELL_H - 1;       // fan gauge, etc.
 
     // Helper wires for column membership
     wire in_col0 = (hcount >= COL0_L) && (hcount <= COL0_R);
@@ -703,19 +767,37 @@ endfunction
     wire in_col2 = (hcount >= COL2_L) && (hcount <= COL2_R);
     wire in_col3 = (hcount >= COL3_L) && (hcount <= COL3_R);
 
+    // Keyboard tile strip geometry (ROW3, spanning COL2–COL3)
+    localparam [9:0] KBD_BAND_Y_T = ROW3_T + 10'd2;
+    localparam [9:0] KBD_BAND_Y_B = KBD_BAND_Y_T + 10'd12;
+    localparam [9:0] KBD_TILE_W   = 10'd18;
+    localparam [9:0] KBD_TILE_SP  = 10'd6;
+    localparam [9:0] KBD_TILE_STR = KBD_TILE_W + KBD_TILE_SP;
+    localparam [9:0] KBD_X0       = COL2_L + 10'd6;
+    localparam [9:0] KBD_X1       = KBD_X0 + 5*KBD_TILE_STR - KBD_TILE_SP - 1;
+    localparam [9:0] KBD_GLYPH_Y  = KBD_BAND_Y_T + 10'd2;
+
     // ------------------------------------------------------------------------
     // 3) UART activity: decaying level (0..255) in pix_clk domain
     // ------------------------------------------------------------------------
     reg [7:0] uart_level = 8'd0;
+    reg [7:0] kbd_level  = 8'd0;
 
     always @(posedge pix_clk) begin
         if (rst) begin
             uart_level <= 8'd0;
+            kbd_level  <= 8'd0;
         end else begin
             if (tx_vld_rise) begin
                 uart_level <= 8'hFF;
             end else if (frame_tick && (uart_level != 8'd0)) begin
                 uart_level <= uart_level - 8'd1;
+            end
+
+            if (kbd_cmd_rise_pix) begin
+                kbd_level <= 8'hFF;
+            end else if (frame_tick && (kbd_level != 8'd0)) begin
+                kbd_level <= kbd_level - 8'd2; // faster decay for command pings
             end
         end
     end
@@ -1659,7 +1741,132 @@ endfunction
 
 
     // ------------------------------------------------------------------------
-    // 14) PIR “motion streak” – row3, columns 2–3
+    // 14) USB keyboard telemetry – row3, columns 2–3
+    // ------------------------------------------------------------------------
+    wire in_kbd_band_y = (vcount >= KBD_BAND_Y_T) && (vcount <= KBD_BAND_Y_B);
+    wire in_kbd_band_x = (hcount >= KBD_X0) && (hcount <= KBD_X1);
+
+    wire [9:0] kbd_rel_x     = hcount - KBD_X0;
+    wire [2:0] kbd_tile_idx  = kbd_rel_x / KBD_TILE_STR;
+    wire [9:0] kbd_tile_col  = kbd_rel_x % KBD_TILE_STR;
+
+    wire in_kbd_tile =
+        in_kbd_band_x &&
+        in_kbd_band_y &&
+        (kbd_tile_col < KBD_TILE_W) &&
+        (kbd_tile_idx < 3'd5);
+
+    reg kbd_tile_on;
+    always @* begin
+        kbd_tile_on = 1'b0;
+        case (kbd_tile_idx)
+            3'd0: kbd_tile_on = kbd_sw_manual_pix;   // M
+            3'd1: kbd_tile_on = kbd_sw_temp_pix;     // U
+            3'd2: kbd_tile_on = kbd_sw_pir_pix;      // P
+            3'd3: kbd_tile_on = kbd_sw_srv_pix;      // A
+            3'd4: kbd_tile_on = kbd_sw_logo_pix;     // L
+            default: kbd_tile_on = 1'b0;
+        endcase
+    end
+
+    wire [3:0] kbd_boost = kbd_level[7:4];
+    wire [11:0] kbd_on_color = { 4'h0, (4'h8 | (kbd_boost >> 1)), 4'hF };
+
+    // Last command glyphs ("!X") anchored in ROW3,COL3
+    localparam [9:0] KBD_CMD_X0 = COL3_L + 10'd8;
+    localparam [9:0] KBD_CMD_Y0 = ROW3_T + 10'd18;
+    localparam [9:0] KBD_CMD_SP = 10'd10;
+
+    wire kbd_excl_px;
+    wire kbd_cmd_px;
+
+    vga_char_glyph u_kbd_excl (
+        .clk_pix      (pix_clk),
+        .rst_pix      (rst),
+        .hcount       (hcount),
+        .vcount       (vcount),
+        .active_video (active_video),
+        .x0           (KBD_CMD_X0),
+        .y0           (KBD_CMD_Y0),
+        .char_code    ("!"),
+        .pixel_on     (kbd_excl_px)
+    );
+
+    vga_char_glyph u_kbd_cmd (
+        .clk_pix      (pix_clk),
+        .rst_pix      (rst),
+        .hcount       (hcount),
+        .vcount       (vcount),
+        .active_video (active_video),
+        .x0           (KBD_CMD_X0 + KBD_CMD_SP),
+        .y0           (KBD_CMD_Y0),
+        .char_code    (kbd_cmd_byte_pix),
+        .pixel_on     (kbd_cmd_px)
+    );
+
+    // Override tile glyphs (M / U / P / A / L)
+    wire kbd_lbl_M, kbd_lbl_U, kbd_lbl_P, kbd_lbl_A, kbd_lbl_L;
+
+    vga_char_glyph u_kbd_lbl_M (
+        .clk_pix      (pix_clk),
+        .rst_pix      (rst),
+        .hcount       (hcount),
+        .vcount       (vcount),
+        .active_video (active_video),
+        .x0           (KBD_X0 + 10'd4 + 0*KBD_TILE_STR),
+        .y0           (KBD_GLYPH_Y),
+        .char_code    ("M"),
+        .pixel_on     (kbd_lbl_M)
+    );
+    vga_char_glyph u_kbd_lbl_U (
+        .clk_pix      (pix_clk),
+        .rst_pix      (rst),
+        .hcount       (hcount),
+        .vcount       (vcount),
+        .active_video (active_video),
+        .x0           (KBD_X0 + 10'd4 + 1*KBD_TILE_STR),
+        .y0           (KBD_GLYPH_Y),
+        .char_code    ("U"),
+        .pixel_on     (kbd_lbl_U)
+    );
+    vga_char_glyph u_kbd_lbl_P (
+        .clk_pix      (pix_clk),
+        .rst_pix      (rst),
+        .hcount       (hcount),
+        .vcount       (vcount),
+        .active_video (active_video),
+        .x0           (KBD_X0 + 10'd4 + 2*KBD_TILE_STR),
+        .y0           (KBD_GLYPH_Y),
+        .char_code    ("P"),
+        .pixel_on     (kbd_lbl_P)
+    );
+    vga_char_glyph u_kbd_lbl_A (
+        .clk_pix      (pix_clk),
+        .rst_pix      (rst),
+        .hcount       (hcount),
+        .vcount       (vcount),
+        .active_video (active_video),
+        .x0           (KBD_X0 + 10'd4 + 3*KBD_TILE_STR),
+        .y0           (KBD_GLYPH_Y),
+        .char_code    ("A"),
+        .pixel_on     (kbd_lbl_A)
+    );
+    vga_char_glyph u_kbd_lbl_L (
+        .clk_pix      (pix_clk),
+        .rst_pix      (rst),
+        .hcount       (hcount),
+        .vcount       (vcount),
+        .active_video (active_video),
+        .x0           (KBD_X0 + 10'd4 + 4*KBD_TILE_STR),
+        .y0           (KBD_GLYPH_Y),
+        .char_code    ("L"),
+        .pixel_on     (kbd_lbl_L)
+    );
+
+    wire kbd_glyph_on = kbd_lbl_M | kbd_lbl_U | kbd_lbl_P | kbd_lbl_A | kbd_lbl_L;
+
+    // ------------------------------------------------------------------------
+    // 15) PIR “motion streak” – row3, columns 2–3
     // ------------------------------------------------------------------------
     wire in_pir_band_y = (vcount >= ROW3_T) && (vcount <= ROW3_B);
     wire [9:0] pir_x_r =
@@ -2751,6 +2958,19 @@ endfunction
                 rgb_out = pir_act_s1 ? COL_GREEN : COL_YELLOW;
             end
 
+            // USB keyboard override tiles and glyphs (row3, cols2–3)
+            if (in_kbd_tile) begin
+                rgb_out = kbd_tile_on ? kbd_on_color : COL_DIMGRAY;
+            end
+
+            if (kbd_glyph_on) begin
+                rgb_out = kbd_tile_on ? COL_TEXT : COL_LIGHT;
+            end
+
+            if (kbd_excl_px || kbd_cmd_px) begin
+                rgb_out = { 4'h0, (kbd_boost | 4'h6), 4'hF };
+            end
+
             // UART bit tiles: 1 → bright cyan, 0 → dim gray
             if (uart_bit7_px) rgb_out = uart_bit7_val ? COL_CYAN : COL_DIMGRAY;
             if (uart_bit6_px) rgb_out = uart_bit6_val ? COL_CYAN : COL_DIMGRAY;
@@ -2884,3 +3104,5 @@ endfunction
     end
 
 endmodule
+
+`default_nettype wire
