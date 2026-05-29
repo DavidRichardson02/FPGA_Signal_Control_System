@@ -11,6 +11,10 @@ The design combines:
 
 Everything runs in hardware in a **single 100 MHz clock domain** – no soft CPU.
 
+<img width="1280" height="1079" alt="input_image Large" src="https://github.com/user-attachments/assets/ab0b8ce5-7643-4320-ab20-72e9109e54fd" />
+
+
+
 <p align="center">
   <img src="assets/system_block_diagram_um.svg" width="100%" alt="FPGA Signal Control System block diagram (UM blue/maize)">
 </p>
